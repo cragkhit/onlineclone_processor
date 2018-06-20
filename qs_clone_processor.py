@@ -1,3 +1,6 @@
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
 import pickle
 import time
 from pathlib import Path
@@ -5,7 +8,10 @@ from collections import OrderedDict
 from subprocess import Popen, PIPE
 import os, sys, traceback
 import glob2
-import statistics
+import matplotlib.pyplot as plt
+from statistics import mean, median
+from datetime import datetime
+from dateutil import relativedelta
 
 
 def write_file(filename, fcontent, mode, isprint):
@@ -42,11 +48,11 @@ def delete_file(filename):
 
 def connect_firebase():
     # Fetch the service account key JSON file contents
-    cred = credentials.Certificate('cloverflow-exqs-firebase-adminsdk.json')
+    cred = credentials.Certificate('cloverflow-exqs-outdated-firebase-adminsdk.json')
 
     # Initialize the app with a service account, granting admin privileges
     firebase_admin.initialize_app(cred, {
-        'databaseURL': 'https://cloverflow-exqs.firebaseio.com/'
+        'databaseURL': 'https://cloverflow-exqs-outdated.firebaseio.com'
     })
     # Get a database reference to our clone pairs.
     ref = db.reference('clones/pairs')
@@ -58,8 +64,22 @@ def download_clones():
     ref = connect_firebase()
     # download all clone pairs
     clones = ref.get()
-    print("total clone pairs: ", len(clones))
+    # for idx, clone in enumerate(clones):
+    #     if clone is None:
+    #         del clones[idx]
+    print("total clone pairs from the firebase db: ", len(clones))
     return clones
+
+
+def clean(clones):
+    print('removing null clone pairs.')
+    filtered = []
+    for idx, c in enumerate(clones):
+        if c is not None:
+            filtered.append(c)
+        else:
+            print('removed: ', idx)
+    return filtered
 
 
 def write_clones_to_file(clones, columns, file_name, print_header=True, quote_on=False):
@@ -99,9 +119,9 @@ def print_a_clone(clone, columns, print_header=True):
 
         if column is 'latest_change_date':
             s, ms = divmod(int(clone[column]), 1000)
-            content += '%s.%03d' % (time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(s)), ms) + '\n'
+            content += '%s.%03d' % (time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(s)), ms) + ','
         else:
-            content += str(clone[column]) + '\n'
+            content += str(clone[column]) + ','
 
     print(content)
 
@@ -289,9 +309,17 @@ def read_list_from_file(file):
     return list
 
 
+def plot_clone_size(clones):
+    sizes = []
+    for clone in clones:
+        start = clone['start1']
+        end = clone['end1']
+        size = end - start + 1
+        size.append(size)
+
+
+
 def get_numlines(code):
-    # print(code.strip())
-    # print('-' * 60)
     lines = code.strip().split('\n')
     return len(lines)
 
@@ -387,8 +415,12 @@ def get_license(classification, clones):
     if classification == "EX":
         column1 = 'code1_license'
         column2 = 'ex_license'
-
     for idx, clone in enumerate(clones):
+        write_file('clone_licenses.csv',
+                   classification + ',' +
+                   clone['file1'] + ',' + clone['file2'] + ',' +
+                   clone[column1] + ',' + clone[column2] + '\n',
+                   'a', False)
         key = clone[column1] + " & " + clone[column2]
         if key not in licenses.keys():
             licenses[key] = 1
@@ -442,8 +474,219 @@ def get_file_size(location):
 
 
 def create_csv(clones):
-    columns = ['file1','start1','end1','file2','start2','end2','classification','notes']
+    columns = ['file1', 'start1', 'end1', 'file2', 'start2', 'end2', 'classification', 'notes']
     write_clones_to_file(clones, columns, "clones.csv", print_header=True, quote_on=True)
+
+
+def stats(data):
+    print(min(data), '&', max(data), '&', mean(data), '&', median(data), '\\\\')
+
+
+def get_sizes(data):
+    return [d['end1'] - d['start1'] + 1 for d in data]
+
+
+def boxplot(data1, data2, data3, data4, data5, data6):
+    """
+    Plot a boxplot of clone size (QS, UD, EX)
+    :param data1: clones#1 (QS)
+    :param data2: clones#2 (UD)
+    :param data3: clones#3 (EX)
+    :return: N/A
+    """
+    size1 = get_sizes(data1)
+    size2 = get_sizes(data2)
+    size3 = get_sizes(data3)
+    size4 = get_sizes(data4)
+    size5 = get_sizes(data5)
+    size6 = get_sizes(data6)
+    data = [size1, size2, size3, size4, size5, size6]
+    plt.figure()
+    plt.boxplot(data)
+    # plt.ylim(10)
+    plt.ylabel('no. of lines')
+    plt.xticks([1, 2, 3, 4, 5, 6], ['QS', 'SQ', 'UD', 'EX', 'BP', 'IN'])
+    plt.savefig('boxplot_clone_size.pdf', bbox_inches='tight')
+
+
+def boxplot_combined(data1, data2, data3, data4, data5, data6):
+    """
+    Plot a boxplot of clone size (QS, UD, EX)
+    :param data1: clones#1 (QS)
+    :param data2: clones#2 (SQ)
+    :param data3: clones#3 (UD)
+    :param data4: clones#4 (EX)
+    :return: N/A
+    """
+    combined = data1 + data2 + data3 + data4 + data5 + data6
+    size = get_sizes(combined)
+    data = [size]
+    fig = plt.figure()
+    plt.boxplot(data, vert=False)
+    # plt.ylim(10)
+    plt.xlabel('no. of lines')
+    plt.xlim(0, 140)
+    plt.tick_params(
+        axis='y',  # changes apply to the x-axis
+        which='both',  # both major and minor ticks are affected
+        left=False,  # ticks along the bottom edge are off
+        right=False,  # ticks along the top edge are off
+        labelleft=False)  # labels along the bottom edge are off
+    fig.set_size_inches(7, 2)
+    plt.savefig('boxplot_clone_size_combined.pdf', bbox_inches='tight')
+
+
+def write_outdated_clones_to_file(outdated_clones):
+    metadata = ''
+    # write all the outdated snippets to files
+    for i, oc in enumerate(outdated_clones):
+        lines = oc['code1'].split('\n')
+        # print(oc['file1'], oc['start1'], oc['end1'])
+        code = '\n'.join(lines[int(oc['start1']) - 1: int(oc['end1'])])
+        # print(oc)
+        # print_a_clone(oc, ['file1', 'code1'], print_header=False)
+        metadata += str(i + 1) + '_' + oc['file1'] + ',' + str(oc['start1']) + ',' + str(oc['end1']) + ','
+        metadata += oc['file2'] + ',' + str(oc['start2']) + ',' + str(oc['end2']) + '\n'
+        write_file(
+            '/Users/Chaiyong/Downloads/stackoverflow/stackoverflow_outdated_snippets/' + str(i + 1) + '_' + oc['file1'],
+            code, 'w', False)
+    write_file('outdated_metadata.csv', metadata, 'w', False)
+
+
+def count_od_comment_outdated(outdated_clones):
+    count = [0, 0, 0]
+    changed = 0
+    for idx, odc in enumerate(outdated_clones):
+        if odc['od_comment_outdated'] == 'Yes' or odc['od_comment_outdated'] == 'Maybe':
+            count[0] += 1
+            if odc['od_changed_outdated_code'] == 'Yes':
+                changed += 1
+        elif odc['od_comment_outdated'] == 'No':
+            count[1] += 1
+        elif odc['od_comment_outdated'] == 'Not found':
+            count[2] += 1
+    return count, changed
+
+
+def count_newer_higher_votes(outdated_clones):
+    newer_count = 0
+    higher_vote_count = [0, 0]
+    for idx, odc in enumerate(outdated_clones):
+        if 'Yes' in odc['od_newer_answer']:
+            newer_count += 1
+        if 'Yes' in odc['od_higher-voted_answers']:
+            higher_vote_count[0] += 1
+        elif 'Equal' in odc['od_higher-voted_answers']:
+            higher_vote_count[1] += 1
+    return newer_count, higher_vote_count
+
+
+def get_clone_ages(clones, type, ref_dates):
+    data = list()
+    for idx, odc in enumerate(clones):
+        if odc['od_answer_post_date'] != 'None':
+            postdate = odc['od_answer_post_date'].split(' ')[0]
+            d = datetime.strptime(postdate, '%d-%b-%y')
+            proj_name = odc['file2'].split('/')[0]
+            ref_d = datetime.strptime(ref_dates[proj_name], '%d-%b-%y')
+            # exit()
+            if type == 'days':
+                delta = d - ref_d
+                data.append(delta.days)
+            elif type == 'months':
+                r = relativedelta.relativedelta(d, ref_d)
+                if r.years < 0:
+                    r.years = 0
+                if r.months < 0:
+                    r.months = 0
+                # print(d, ref_d, r.years, r.months)
+                data.append(r.years * 12 + r.months)
+            else:
+                print('Error: wrong clone age type (days or months).')
+                exit()
+    return data
+
+
+def get_qs_ref_dates():
+    ref_dates = {
+        'antlr4-4.0': '22-Jan-13',
+        'apache-ant-1.8.4': '23-May-12',
+        'apache-log4j-1.2.16': '31-Mar-10',
+        'apache-tomcat-7.0.2': '11-Aug-10',
+        'Compiere_330_Source': '2-Mar-09',
+        'eclipse_SDK': '5-Jun-13',
+        'hadoop-1': '27-Dec-11',
+        'hibernate-release-4': '22-May-13',
+        'iReport-3': '22-Sep-10',
+        'iText-src-5': '22-Jul-10',
+        'jasperreports-3': '1-Jun-10',
+        'jfreechart-1': '20-Apr-09',
+        'jgraph-latest-bsd-src': '23-Nov-09',
+        'jgrapht-0': '11-Mar-11',
+        'jstock-1.0.7c': '18-Jun-13',
+        'jung2-2_0_1': '25-Jan-10',
+        'junit-4': '14-Nov-12',
+        'lucene-4.3.0': '3-May-13',
+        'netbeans-6.9.1-201007282301': '28-Jul-10',
+        'poi-3.6-20091214': '14-Dec-09',
+        'spring-framework-3.0.5': '29-Oct-10',
+        'struts2-2.2.1-all': '15-Aug-10',
+        'weka-3-7-9': '21-Feb-13',
+        'c-jdbc-2': '2-Jan-13',
+        'jboss-5': '23-May-09',
+        'freemind-src-0': '18-Feb-11',
+        'geotools-2': '2-Sep-10',
+        'aoisrc281': '15-Feb-10'
+    }
+    return ref_dates
+
+
+def boxplot_post_age(clone_set, names):
+    plt.figure()
+    type = 'months'
+    ref_dates = get_qs_ref_dates()
+    data = list()
+    for set in clone_set:
+        data.append(get_clone_ages(set, type, ref_dates))
+    print('\nCLONE AGE (' + type + ')')
+    print('min & max & mean & median')
+    for idx, name in enumerate(names):
+        print(name, end=' & ')
+        stats(data[idx])
+
+    fig = plt.figure()
+    plt.boxplot(data, vert=False)
+    # plt.xticks(range(1, len(names) + 1), names)
+    plt.xlabel('age of clones (' + type + ')')
+    plt.tick_params(
+        axis='y',  # changes apply to the x-axis
+        which='both',  # both major and minor ticks are affected
+        left=False,  # ticks along the bottom edge are off
+        right=False,  # ticks along the top edge are off
+        labelleft=False)  # labels along the bottom edge are off
+    fig.set_size_inches(7, 2)
+    plt.savefig('boxplot_clone_age.pdf', bbox_inches='tight')
+
+
+def count_outdated_reason(outdated_clones):
+    reasons = dict()
+    for idx, odc in enumerate(outdated_clones):
+        r = odc['od_reason_change']
+        if r not in reasons:
+            reasons[r] = 1
+        else:
+            reasons[r] = reasons[r] + 1
+        # if r == 'bug':
+        #     print(odc['file1'])
+    return reasons
+
+
+def print_no_date_clones(clones):
+    for idx, c in enumerate(clones):
+        try:
+            c['od_answer_post_date']
+        except:
+            print(idx, c['file1'], 'Missing')
 
 
 def main():
@@ -459,8 +702,16 @@ def main():
     filename = "allclones.list"
     clonefile = Path(filename)
 
-    allclones = read_list_from_file("allclones.list")
+    if not clonefile.exists():
+        # download clones
+        print("Clone data does not exist. Downloading from the db ...")
+        allclones = download_clones()
+        write_list_to_file(allclones, filename)
+    else:
+        allclones = read_list_from_file("allclones.list")
 
+    allclones = clean(allclones)
+    print('total clone pairs after removing nulls:', len(allclones))
     # print all the clones to a csv file
     create_csv(allclones)
 
@@ -520,14 +771,14 @@ def main():
     print('-' * 60)
 
     print("RQ2:")
-    print('no. of SO clones (' + classification + ')', len(qs_uclones), '/', len(qs_clones))
-    print('no. of unique SO snippets (' + classification + ')', len(qs_uclones))
-    print('no. of SO clones (' + classification + ')', len(sq_uclones), '/', len(sq_clones))
-    print('no. of SO clones (' + classification + ')', len(ex_uclones), '/', len(ex_clones))
-    print('no. of SO clones (' + classification + ')', len(ud_uclones), '/', len(ud_clones))
-    print('no. of SO clones (' + classification + ')', len(bp_uclones), '/', len(bp_clones))
-    print('no. of SO clones (' + classification + ')', len(in_uclones), '/', len(in_clones))
-    print('no. of SO clones (' + classification + ')', len(ac_uclones), '/', len(ac_clones))
+    print('no. of SO clones (QS)', len(qs_uclones), '/', len(qs_clones))
+    # print('no. of unique SO snippets (' + classification + ')', len(qs_uclones))
+    print('no. of SO clones (SQ)', len(sq_uclones), '/', len(sq_clones))
+    print('no. of SO clones (EX)', len(ex_uclones), '/', len(ex_clones))
+    print('no. of SO clones (UD)', len(ud_uclones), '/', len(ud_clones))
+    print('no. of SO clones (BP)', len(bp_uclones), '/', len(bp_clones))
+    print('no. of SO clones (IN)', len(in_uclones), '/', len(in_clones))
+    print('no. of SO clones (AC)', len(ac_uclones), '/', len(ac_clones))
 
     projects, pcount = get_qproject(qs_clones)
     print('qualitas projects', len(projects))
@@ -575,12 +826,46 @@ def main():
     # write_clones_to_file(ex_uclones, columns_to_print, file_name, print_header=True, quote_on=True)
     # print('one-sided unique', len(clones))
 
+    # boxplots
+    boxplot(qs_clones, sq_clones, ud_clones, ex_clones, bp_clones, in_clones)
+    boxplot_combined(qs_clones, sq_clones, ud_clones, ex_clones, bp_clones, in_clones)
+    # boxplot_post_age([qs_clones, ex_clones], ['QS', 'EX'])
+    boxplot_post_age([qs_clones], ['QS'])
+
+    print('\nCLONE SIZES:')
+    print('Clones & Min & Max & Mean & Median \\\\')
+    print('QS', end=' & ')
+    stats(get_sizes(qs_clones))
+    print('SQ', end=' & ')
+    stats(get_sizes(sq_clones))
+    print('UD', end=' & ')
+    stats(get_sizes(ud_clones))
+    print('EX', end=' & ')
+    stats(get_sizes(ex_clones))
+    print('BP', end=' & ')
+    stats(get_sizes(bp_clones))
+    print('IN', end=' & ')
+    stats(get_sizes(in_clones))
+
     print()
     print('-' * 60)
 
     print("RQ3:")
     outdated_clones = get_outdated_clones(qs_uclones)
     print('outdated', len(outdated_clones))
+    comment_count, changed = count_od_comment_outdated(outdated_clones)
+    print('oudated with comments (yes/no/not found: changed)', comment_count, changed)
+    newer, higher_votes = count_newer_higher_votes(outdated_clones)
+    print('newer answers', newer)
+    print('higher-voted answers (yes/equal)', higher_votes)
+    print('intents of changes')
+    print(count_outdated_reason(outdated_clones))
+    # exit()
+    # print_no_date_clones(qs_clones)
+    # print_no_date_clones(ex_clones)
+
+    # write outdated clones to a file
+    # write_outdated_clones_to_file(outdated_clones)
 
     # o_projs = get_projects_having_outdated_clones(qs_uclones)
     # OrderDict is suggested by
@@ -608,12 +893,13 @@ def main():
     #
     # for idx, p in enumerate(projects_sorted):
     #     print(format_project_name(p) + ' & ' + str(pcount_sorted[idx]) + ' \\\\')
-
+    #
     # # print outdated clones to a file
     # file_name = "outdated_clones.csv"
-    # columns_to_print = ["file1", "start1", "end1",
-    #                     "latest_change_ad", "latest_change_md", "latest_change_rm",
-    #                     "latest_change_rw", "latest_change_ap", "latest_deleted"]
+    # # columns_to_print = ["file1", "start1", "end1",
+    # #                     "latest_change_ad", "latest_change_md", "latest_change_rm",
+    # #                     "latest_change_rw", "latest_change_ap", "latest_deleted"]
+    # columns_to_print = ["file1", "start1", "end1"]
     # write_clones_to_file(outdated_clones, columns_to_print, file_name, print_header=True, quote_on=False)
 
     print()
@@ -631,6 +917,7 @@ def main():
     # update_license('AC', allclones)
 
     qs_usnippets, _ = get_unique_so_snippets(qs_uclones)
+    delete_file('clone_licenses.csv')
     print('>> QS (', len(qs_usnippets), ')')
     qs_licenses = get_license("QS", qs_usnippets)
     for key, value in qs_licenses.items():
